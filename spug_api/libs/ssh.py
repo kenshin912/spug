@@ -1,8 +1,11 @@
 # Copyright: (c) OpenSpug Organization. https://github.com/openspug/spug
 # Copyright: (c) <spug.dev@gmail.com>
 # Released under the AGPL-3.0 License.
+# Add support for Ed25519Key , ECDSAKey , Debian 13 compatiblity by Cathryn.
 from paramiko.client import SSHClient, AutoAddPolicy
 from paramiko.rsakey import RSAKey
+from paramiko.ed25519key import Ed25519Key
+from paramiko.ecdsakey import ECDSAKey
 from paramiko.auth_handler import AuthHandler
 from paramiko.ssh_exception import AuthenticationException, SSHException
 from paramiko.py3compat import b, u
@@ -10,44 +13,19 @@ from io import StringIO
 from uuid import uuid4
 import time
 import re
+import paramiko
 
-
-def _finalize_pubkey_algorithm(self, key_type):
-    if "rsa" not in key_type:
-        return key_type
-    if re.search(r"-OpenSSH_(?:[1-6]|7\.[0-7])", self.transport.remote_version):
-        pubkey_algo = "ssh-rsa"
-        if key_type.endswith("-cert-v01@openssh.com"):
-            pubkey_algo += "-cert-v01@openssh.com"
-
-        self.transport._agreed_pubkey_algorithm = pubkey_algo
-        return pubkey_algo
-    my_algos = [x for x in self.transport.preferred_pubkeys if "rsa" in x]
-    if not my_algos:
-        raise SSHException(
-            "An RSA key was specified, but no RSA pubkey algorithms are configured!"  # noqa
-        )
-    server_algo_str = u(
-        self.transport.server_extensions.get("server-sig-algs", b(""))
-    )
-    if server_algo_str:
-        server_algos = server_algo_str.split(",")
-        agreement = list(filter(server_algos.__contains__, my_algos))
-        if agreement:
-            pubkey_algo = agreement[0]
-        else:
-            err = "Unable to agree on a pubkey algorithm for signing a {!r} key!"  # noqa
-            raise AuthenticationException(err.format(key_type))
-    else:
-        pubkey_algo = "ssh-rsa"
-    if key_type.endswith("-cert-v01@openssh.com"):
-        pubkey_algo += "-cert-v01@openssh.com"
-    self.transport._agreed_pubkey_algorithm = pubkey_algo
-    return pubkey_algo
-
-
-AuthHandler._finalize_pubkey_algorithm = _finalize_pubkey_algorithm
-
+# ==============================
+# 新增：自动识别私钥类型
+# ==============================
+def load_private_key(pkey: str):
+    buf = StringIO(pkey)
+    for cls in (RSAKey, Ed25519Key, ECDSAKey):
+        try:
+            return cls.from_private_key(buf)
+        except Exception:
+            buf.seek(0)
+    raise SSHException("Unsupported private key format")
 
 class SSH:
     def __init__(self, hostname, port=22, username='root', pkey=None, password=None, default_env=None,
@@ -66,7 +44,7 @@ class SSH:
             'port': port,
             'username': username,
             'password': password,
-            'pkey': RSAKey.from_private_key(StringIO(pkey)) if isinstance(pkey, str) else pkey,
+            'pkey': load_private_key(pkey) if isinstance(pkey, str) else pkey,
             'timeout': connect_timeout,
             'allow_agent': False,
             'look_for_keys': False,
